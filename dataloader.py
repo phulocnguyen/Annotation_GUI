@@ -5,6 +5,7 @@ import pandas as pd
 from PIL import Image
 import cv2
 from scipy import io as scipy_io
+import wfdb
 
 
 class PatientDataLoader:
@@ -128,28 +129,45 @@ class PatientDataLoader:
 
     def load_ecg(self, patient_id: str) -> Optional[Tuple[np.ndarray, dict]]:
         """
-        Load ECG data from PNG image file (ecg_visualization_X.png).
+        Load ECG data from PTB-XL raw files (.hea/.dat) using wfdb.
 
         Args:
             patient_id: Patient identifier (e.g., 'p001')
 
         Returns:
-            Tuple of (image array, metadata dict) or None if file not found
+            Tuple of (signal array, metadata dict) or None if file not found
         """
         patient_dir = self.data_dir / patient_id
-        
-        # Find ecg_visualization_*.png file in the patient directory
+
+        # Prefer PTB-XL raw records (.hea/.dat)
+        hea_files = list(patient_dir.glob("*.hea"))
+        if hea_files:
+            record_path = hea_files[0].with_suffix("")
+            try:
+                signal, meta = wfdb.rdsamp(str(record_path))
+                signal = np.asarray(signal, dtype=np.float32).transpose(1, 0)  # (C, T)
+                metadata = {
+                    "modality": "ECG",
+                    "format": "wfdb",
+                    "shape": signal.shape,
+                    "fs": meta.get("fs"),
+                    "sig_name": meta.get("sig_name"),
+                    "units": meta.get("units"),
+                }
+                return signal, metadata
+            except Exception as e:
+                print(f"Error loading ECG wfdb for {patient_id}: {e}")
+
+        # Fallback: PNG visualization if raw signal is not present
         ecg_png_files = list(patient_dir.glob("ecg_visualization_*.png"))
         if not ecg_png_files:
             return None
-        
-        png_file = ecg_png_files[0]
 
+        png_file = ecg_png_files[0]
         try:
             img = Image.open(png_file)
             img_array = np.array(img)
 
-            # Get image dimensions
             if len(img_array.shape) == 3:
                 height, width, channels = img_array.shape
             else:
