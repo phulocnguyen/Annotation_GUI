@@ -109,6 +109,37 @@ class ECGViewerWidget(QtWidgets.QWidget):
         self.toolbar.setVisible(False)
         self.toolbar.setEnabled(False)
 
+        self._render_grid()
+
+    def show_single_mode(self, lead_index: int) -> None:
+        if self.signal is None:
+            return
+        if lead_index < 0 or lead_index >= 12:
+            return
+
+        self.current_mode = "single"
+        self.selected_lead = lead_index
+        self.back_button.setVisible(True)
+        self.back_button.setEnabled(True)
+        self.toolbar.setVisible(True)
+        self.toolbar.setEnabled(True)
+
+        self._render_single()
+
+    def on_click(self, event) -> None:
+        if self.current_mode != "grid":
+            return
+        if event.inaxes is None:
+            return
+
+        for i, ax in enumerate(self._grid_axes):
+            if event.inaxes == ax:
+                self.show_single_mode(i)
+                return
+
+    def _render_grid(self) -> None:
+        if self.signal is None:
+            return
         self.figure.clear()
         self._grid_axes = []
 
@@ -128,19 +159,10 @@ class ECGViewerWidget(QtWidgets.QWidget):
         self.figure.tight_layout()
         self.canvas.draw_idle()
 
-    def show_single_mode(self, lead_index: int) -> None:
-        if self.signal is None:
+    def _render_single(self) -> None:
+        if self.signal is None or self.selected_lead is None:
             return
-        if lead_index < 0 or lead_index >= 12:
-            return
-
-        self.current_mode = "single"
-        self.selected_lead = lead_index
-        self.back_button.setVisible(True)
-        self.back_button.setEnabled(True)
-        self.toolbar.setVisible(True)
-        self.toolbar.setEnabled(True)
-
+        lead_index = self.selected_lead
         self.figure.clear()
         t_len = min(self.signal.shape[1], self.max_time)
 
@@ -154,16 +176,14 @@ class ECGViewerWidget(QtWidgets.QWidget):
         self.figure.tight_layout()
         self.canvas.draw_idle()
 
-    def on_click(self, event) -> None:
-        if self.current_mode != "grid":
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self.signal is None:
             return
-        if event.inaxes is None:
-            return
-
-        for i, ax in enumerate(self._grid_axes):
-            if event.inaxes == ax:
-                self.show_single_mode(i)
-                return
+        if self.current_mode == "grid":
+            QtCore.QTimer.singleShot(0, self._render_grid)
+        elif self.current_mode == "single":
+            QtCore.QTimer.singleShot(0, self._render_single)
 
 
 class ImageViewer(QtWidgets.QGraphicsView):
@@ -224,9 +244,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.video_timer = QtCore.QTimer()
         self.video_timer.timeout.connect(self.play_next_frame)
         self.is_video_playing = False
-        self.autoplay_timer = QtCore.QTimer()
-        self.autoplay_timer.setSingleShot(True)
-        self.autoplay_timer.timeout.connect(self._start_echo_autoplay)
         self.current_echo_metadata = None
         self.current_modality_label = None
 
@@ -274,8 +291,8 @@ class MainWindow(QtWidgets.QMainWindow):
             QToolButton { background: #0F766E; color: #ffffff; border: none; padding: 2px 6px; border-radius: 8px; font-weight: 600; }
             QToolButton:hover { background: #0B5D57; }
             QToolButton:checked { background: #0A4A46; }
-            QComboBox#SpeedCombo { background: #007AFF; color: #ffffff; border: 1px solid #007AFF; padding: 4px 10px; border-radius: 8px; min-width: 50px; }
-            QComboBox#SpeedCombo::drop-down { border: none; width: 18px; }
+            QComboBox#SpeedCombo { background: #007AFF; color: #ffffff; border: 1px solid #007AFF; padding: 4px 7px; border-radius: 8px; min-width: 50px; }
+            QComboBox#SpeedCombo::drop-down { border: none; width: 10px; }
             QComboBox#SpeedCombo QAbstractItemView { background: #0a57c2; color: #ffffff; selection-background-color: #0f66e0; selection-color: #ffffff; }
             QSlider#FrameSlider::groove:horizontal { border: 1px solid #cccccc; height: 6px; background: #e8e8e8; border-radius: 3px; }
             QSlider#FrameSlider::handle:horizontal { background: #007AFF; width: 12px; margin: -3px 0; border-radius: 6px; }
@@ -285,6 +302,8 @@ class MainWindow(QtWidgets.QMainWindow):
             QGraphicsView#ImageFrame { background: #000000; border: 1px solid #222222; border-radius: 16px; }
             QLabel#ImageFrame { background: #ffffff; border: 1px solid #cccccc; border-radius: 16px; }
             QLabel#EchoFrame { background: #000000; border: 1px solid #222222; border-radius: 16px; }
+            QFrame#EchoOverlayPanel { background: rgba(0, 0, 0, 170); border: 1px solid #111111; border-radius: 10px; }
+            QLabel#EchoOverlayLabel { color: #ffffff; font-weight: 600; }
             QLabel { color: #000000; }
             """
         )
@@ -390,6 +409,67 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
         self._echo_pixmap_orig = None
+        self.echo_container = QtWidgets.QWidget()
+        echo_stack = QtWidgets.QStackedLayout(self.echo_container)
+        echo_stack.setStackingMode(QtWidgets.QStackedLayout.StackingMode.StackAll)
+        echo_stack.setContentsMargins(0, 0, 0, 0)
+        echo_stack.addWidget(self.echo_label)
+
+        self.echo_overlay_root = QtWidgets.QWidget()
+        overlay_layout = QtWidgets.QVBoxLayout(self.echo_overlay_root)
+        overlay_layout.setContentsMargins(12, 12, 12, 12)
+        overlay_layout.addStretch(1)
+        overlay_row = QtWidgets.QHBoxLayout()
+        overlay_row.addStretch(1)
+        self.echo_overlay_panel = QtWidgets.QFrame()
+        self.echo_overlay_panel.setObjectName("EchoOverlayPanel")
+        panel_layout = QtWidgets.QGridLayout(self.echo_overlay_panel)
+        panel_layout.setContentsMargins(8, 6, 8, 6)
+        panel_layout.setHorizontalSpacing(8)
+        panel_layout.setVerticalSpacing(6)
+
+        self.echo_frame_title = QtWidgets.QLabel("Frame :")
+        self.echo_frame_title.setObjectName("EchoOverlayLabel")
+        self.echo_speed_title = QtWidgets.QLabel("Speed :")
+        self.echo_speed_title.setObjectName("EchoOverlayLabel")
+
+        self.echo_frame_value = QtWidgets.QWidget()
+        frame_value_layout = QtWidgets.QHBoxLayout(self.echo_frame_value)
+        frame_value_layout.setContentsMargins(0, 0, 0, 0)
+        frame_value_layout.setSpacing(2)
+        self.echo_frame_current_label = QtWidgets.QLabel("0")
+        self.echo_frame_current_label.setObjectName("EchoOverlayLabel")
+        self.echo_frame_current_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.echo_frame_slash_label = QtWidgets.QLabel("/")
+        self.echo_frame_slash_label.setObjectName("EchoOverlayLabel")
+        self.echo_frame_total_label = QtWidgets.QLabel("0")
+        self.echo_frame_total_label.setObjectName("EchoOverlayLabel")
+        self.echo_frame_total_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        frame_value_layout.addWidget(self.echo_frame_current_label)
+        frame_value_layout.addWidget(self.echo_frame_slash_label)
+        frame_value_layout.addWidget(self.echo_frame_total_label)
+
+        self.echo_speed_value_label = QtWidgets.QLabel("0x")
+        self.echo_speed_value_label.setObjectName("EchoOverlayLabel")
+        self.echo_speed_value_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignLeft
+        )
+
+        panel_layout.addWidget(self.echo_frame_title, 0, 0)
+        panel_layout.addWidget(self.echo_frame_value, 0, 1)
+        panel_layout.addWidget(self.echo_speed_title, 1, 0)
+        panel_layout.addWidget(self.echo_speed_value_label, 1, 1)
+        overlay_row.addWidget(self.echo_overlay_panel)
+        overlay_layout.addLayout(overlay_row)
+        echo_stack.addWidget(self.echo_overlay_root)
+        self.echo_overlay_root.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self.echo_overlay_root.setVisible(False)
 
         self.ecg_viewer = ECGViewerWidget()
         self.ecg_viewer.setSizePolicy(
@@ -399,7 +479,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.content_stack = QtWidgets.QStackedWidget()
         self.content_stack.addWidget(self.image_viewer)  # Angio (zoom)
-        self.content_stack.addWidget(self.echo_label)    # Echo (no zoom)
+        self.content_stack.addWidget(self.echo_container)    # Echo (no zoom)
         self.content_stack.addWidget(self.ecg_viewer)
 
         # Video control panel for echo
@@ -411,10 +491,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.controls_bar.setMinimumHeight(44)
-
-        self.autoplay_checkbox = QtWidgets.QCheckBox("Autoplay")
-        self.autoplay_checkbox.setChecked(True)
+        self.controls_bar.setMinimumHeight(30)
 
         self.speed_combo = QtWidgets.QComboBox()
         self.speed_combo.setObjectName("SpeedCombo")
@@ -446,8 +523,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.frame_label.setMaximumWidth(60)
         self.frame_label.setVisible(False)
 
-        controls_layout.addWidget(self.autoplay_checkbox)
         controls_layout.addWidget(self.speed_combo)
+
         controls_layout.addWidget(self.play_pause_button)
         controls_layout.addWidget(self.stop_button)
         controls_layout.addWidget(self.frame_slider)
@@ -591,16 +668,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 self.frame_slider.setMaximum(len(frames) - 1)
                 self.frame_slider.setValue(0)
+                self._update_echo_overlay_widths(len(frames))
                 self.update_frame_label()
 
                 self.display_frame(0)
-                self.content_stack.setCurrentWidget(self.echo_label)
+                self.content_stack.setCurrentWidget(self.echo_container)
 
                 self.is_video_playing = False
                 self.play_pause_button.setText("Play")
-                self.autoplay_timer.stop()
-                if self.autoplay_checkbox.isChecked():
-                    self.autoplay_timer.start(1000)
                 self.play_pause_button.setEnabled(True)
                 self.stop_button.setEnabled(True)
                 self.frame_slider.setEnabled(True)
@@ -659,27 +734,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.is_video_playing = False
             self.play_pause_button.setText("Play")
         else:
-            self.autoplay_timer.stop()
             self._apply_playback_speed()
             self.video_timer.start()
             self.is_video_playing = True
             self.play_pause_button.setText("Pause")
 
-    def _start_echo_autoplay(self):
-        if self.current_modality_label != "Echocardiography":
-            return
-        if self.current_echo_frames is None or len(self.current_echo_frames) == 0:
-            return
-        if self.is_video_playing:
-            return
-        self.video_timer.start()
-        self.is_video_playing = True
-        self.play_pause_button.setText("Pause")
-
     def stop_video(self):
         if self.video_timer.isActive():
             self.video_timer.stop()
-        self.autoplay_timer.stop()
         self.is_video_playing = False
         if self.current_echo_frames is not None and len(self.current_echo_frames) > 0:
             self.current_frame_index = 0
@@ -712,6 +774,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.playback_speed = float(text.replace("x", ""))
         except ValueError:
             self.playback_speed = 1.0
+        self._update_echo_overlay_widths(len(self.current_echo_frames) if self.current_echo_frames else 0)
+        self._update_echo_overlay_text()
         if self.is_video_playing:
             self._apply_playback_speed()
 
@@ -722,12 +786,47 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_frame_label(self):
         if self.current_echo_frames is not None:
+            display_index = min(self.current_frame_index + 1, len(self.current_echo_frames))
             self.frame_label.setText(
-                f"{self.current_frame_index}/{len(self.current_echo_frames)}"
+                f"{display_index}/{len(self.current_echo_frames)}"
             )
+            self._update_echo_overlay_text()
+
+    def _update_echo_overlay_text(self):
+        if not hasattr(self, "echo_frame_current_label") or not hasattr(self, "echo_speed_value_label"):
+            return
+        total = len(self.current_echo_frames) if self.current_echo_frames else 0
+        display_index = min(self.current_frame_index + 1, total) if total else 0
+        speed_text = self.speed_combo.currentText() if hasattr(self, "speed_combo") else f"{self.playback_speed:g}x"
+        self.echo_frame_current_label.setText(str(display_index))
+        self.echo_frame_total_label.setText(str(total))
+        self.echo_speed_value_label.setText(speed_text)
+
+    def _update_echo_overlay_widths(self, total_frames: int) -> None:
+        if not hasattr(self, "echo_frame_current_label") or not hasattr(self, "echo_speed_value_label"):
+            return
+        label_width = max(
+            self.echo_frame_title.fontMetrics().horizontalAdvance("Frame :"),
+            self.echo_speed_title.fontMetrics().horizontalAdvance("Speed :"),
+        )
+        self.echo_frame_title.setFixedWidth(label_width + 2)
+        self.echo_speed_title.setFixedWidth(label_width + 2)
+
+        total_digits = max(1, len(str(total_frames)))
+        max_num = "9" * total_digits
+        num_width = self.echo_frame_current_label.fontMetrics().horizontalAdvance(max_num)
+        self.echo_frame_current_label.setFixedWidth(num_width + 2)
+        self.echo_frame_total_label.setFixedWidth(num_width + 2)
+
+        if hasattr(self, "speed_combo"):
+            speed_items = [self.speed_combo.itemText(i) for i in range(self.speed_combo.count())]
+            speed_longest = max(speed_items, key=len) if speed_items else f"{self.playback_speed:g}x"
+        else:
+            speed_longest = f"{self.playback_speed:g}x"
+        speed_width = self.echo_speed_value_label.fontMetrics().horizontalAdvance(speed_longest)
+        self.echo_speed_value_label.setFixedWidth(speed_width + 2)
 
     def _show_video_controls(self):
-        self.autoplay_checkbox.setVisible(True)
         self.speed_combo.setVisible(True)
         self.play_pause_button.setVisible(True)
         self.stop_button.setVisible(True)
@@ -736,9 +835,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "controls_bar"):
             self.controls_bar.setVisible(True)
             self.controls_bar.raise_()
+        if hasattr(self, "echo_overlay_root"):
+            self.echo_overlay_root.setVisible(True)
+            self.echo_overlay_root.raise_()
 
     def _hide_video_controls(self):
-        self.autoplay_checkbox.setVisible(False)
         self.speed_combo.setVisible(False)
         self.play_pause_button.setVisible(False)
         self.stop_button.setVisible(False)
@@ -746,6 +847,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.frame_label.setVisible(False)
         if hasattr(self, "controls_bar"):
             self.controls_bar.setVisible(False)
+        if hasattr(self, "echo_overlay_root"):
+            self.echo_overlay_root.setVisible(False)
 
     def _display_angio_image_file(self, file_path: str):
         pixmap = QtGui.QPixmap(file_path)
@@ -806,7 +909,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.content_stack.setCurrentWidget(self.image_viewer)
         else:
             self.echo_label.setPixmap(pixmap)
-            self.content_stack.setCurrentWidget(self.echo_label)
+            self.content_stack.setCurrentWidget(self.echo_container)
 
     def show_patients(self):
         self.stack.setCurrentWidget(self.patient_page)
