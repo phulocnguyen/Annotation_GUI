@@ -274,12 +274,17 @@ class MainWindow(QtWidgets.QMainWindow):
             QToolButton { background: #0F766E; color: #ffffff; border: none; padding: 2px 6px; border-radius: 8px; font-weight: 600; }
             QToolButton:hover { background: #0B5D57; }
             QToolButton:checked { background: #0A4A46; }
+            QComboBox#SpeedCombo { background: #007AFF; color: #ffffff; border: 1px solid #007AFF; padding: 4px 10px; border-radius: 8px; min-width: 50px; }
+            QComboBox#SpeedCombo::drop-down { border: none; width: 18px; }
+            QComboBox#SpeedCombo QAbstractItemView { background: #0a57c2; color: #ffffff; selection-background-color: #0f66e0; selection-color: #ffffff; }
             QSlider#FrameSlider::groove:horizontal { border: 1px solid #cccccc; height: 6px; background: #e8e8e8; border-radius: 3px; }
             QSlider#FrameSlider::handle:horizontal { background: #007AFF; width: 12px; margin: -3px 0; border-radius: 6px; }
             QLabel#FormatTitle { font-size: 18px; font-weight: 600; color: #000000; }
             QLabel#FormatDetail { color: #000000; }
             QFrame#Sidebar { background: #f9f9f9; border-right: 1px solid #cccccc; }
+            QGraphicsView#ImageFrame { background: #000000; border: 1px solid #222222; border-radius: 16px; }
             QLabel#ImageFrame { background: #ffffff; border: 1px solid #cccccc; border-radius: 16px; }
+            QLabel#EchoFrame { background: #000000; border: 1px solid #222222; border-radius: 16px; }
             QLabel { color: #000000; }
             """
         )
@@ -374,7 +379,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         self.echo_label = QtWidgets.QLabel()
-        self.echo_label.setObjectName("ImageFrame")
+        self.echo_label.setObjectName("EchoFrame")
         self.echo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.echo_label.setScaledContents(False)
         self.echo_label.setAttribute(
@@ -412,6 +417,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.autoplay_checkbox.setChecked(True)
 
         self.speed_combo = QtWidgets.QComboBox()
+        self.speed_combo.setObjectName("SpeedCombo")
         self.speed_combo.addItems(["0.25x", "0.5x", "0.75x", "1x"])
         self.speed_combo.setCurrentText("1x")
         self.speed_combo.currentTextChanged.connect(self.on_speed_changed)
