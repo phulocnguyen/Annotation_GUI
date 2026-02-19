@@ -39,15 +39,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.data_loader = PatientDataLoader(data_dir)
         self.visualizer = PatientVisualizer()
-        self.patients = ["p001", "p002", "p003", "p004"]
+        self.patients = self.data_loader.list_patients()
         self.current_patient = None
-        self.current_modality_label = None
-
-        self.formats = [
-            {"label": "ECG", "detail": "Electrocardiogram"},
-            {"label": "Cardiac Angiography", "detail": "X-ray imaging"},
-            {"label": "Echocardiography", "detail": "Ultrasound imaging"},
-        ]
+        self.current_modality_id = None
+        self.formats = self.data_loader.get_modalities()
 
         self.stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -113,29 +108,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         title = QtWidgets.QLabel("Patient imaging navigation")
         title.setObjectName("HeroTitle")
-        subtitle = QtWidgets.QLabel("Please select a patient.")
-        subtitle.setObjectName("HeroSubtitle")
+        self.patient_subtitle = QtWidgets.QLabel("Please select a patient.")
+        self.patient_subtitle.setObjectName("HeroSubtitle")
 
         self.patient_list = QtWidgets.QListWidget()
         self.patient_list.setSpacing(8)
 
-        for i, patient_id in enumerate(self.patients):
-            item = QtWidgets.QListWidgetItem(patient_id.upper())
-            item.setSizeHint(QtCore.QSize(200, 50))
-            item.setForeground(QtGui.QColor("#000000"))
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, patient_id)
-            self.patient_list.addItem(item)
-
-            if i < len(self.patients) - 1:
-                separator_item = QtWidgets.QListWidgetItem()
-                separator_item.setSizeHint(QtCore.QSize(100, 2))
-                separator_item.setFlags(separator_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsSelectable)
-                separator_item.setData(QtCore.Qt.ItemDataRole.UserRole, "separator")
-                self.patient_list.addItem(separator_item)
+        self._populate_patient_list()
 
         self.patient_list.itemClicked.connect(self.on_patient_selected)
         layout.addWidget(title)
-        layout.addWidget(subtitle)
+        layout.addWidget(self.patient_subtitle)
         layout.addWidget(self.patient_list, 1)
         return page
 
@@ -166,6 +149,7 @@ class MainWindow(QtWidgets.QMainWindow):
             header.addWidget(button)
             self.modality_buttons.append(button)
         header.addStretch(1)
+        header.addWidget(self.patient_title)
 
         viewer = QtWidgets.QVBoxLayout()
         viewer.setSpacing(8)
@@ -182,6 +166,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for format_data in self.formats:
             item = QtWidgets.QListWidgetItem(format_data["label"])
             item.setSizeHint(QtCore.QSize(180, 60))
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, format_data["id"])
             self.format_list.addItem(item)
         self.format_list.currentRowChanged.connect(self.on_format_changed)
         self.format_list.setVisible(False)
@@ -205,16 +190,62 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(viewer, 1)
         return page
 
+    def _populate_patient_list(self) -> None:
+        self.patients = self.data_loader.list_patients()
+        self.patient_list.clear()
+        if not self.patients:
+            self.patient_subtitle.setText("No patient folders found in data directory.")
+            return
+
+        self.patient_subtitle.setText(f"Please select a patient ({len(self.patients)} found).")
+        for i, patient_id in enumerate(self.patients):
+            item = QtWidgets.QListWidgetItem(patient_id.upper())
+            item.setSizeHint(QtCore.QSize(200, 50))
+            item.setForeground(QtGui.QColor("#000000"))
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, patient_id)
+            self.patient_list.addItem(item)
+
+            if i < len(self.patients) - 1:
+                separator_item = QtWidgets.QListWidgetItem()
+                separator_item.setSizeHint(QtCore.QSize(100, 2))
+                separator_item.setFlags(separator_item.flags() & ~QtCore.Qt.ItemFlag.ItemIsSelectable)
+                separator_item.setData(QtCore.Qt.ItemDataRole.UserRole, "separator")
+                self.patient_list.addItem(separator_item)
+
+    def _update_modality_availability(self, patient_id: str) -> None:
+        available = set(self.data_loader.available_modalities(patient_id))
+        for i, format_data in enumerate(self.formats):
+            enabled = format_data["id"] in available
+            self.modality_buttons[i].setEnabled(enabled)
+
     def on_patient_selected(self, item):
         patient_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if patient_id == "separator":
+            return
         if patient_id is None:
             patient_id = item.text().replace("👤 ", "").strip()
         self.current_patient = patient_id
-        self.patient_title.setText(f"Patient {patient_id}")
+        self.patient_title.setText(f"Patient: {patient_id.upper()}")
+        self.patient_title.setVisible(True)
+        self._update_modality_availability(patient_id)
         self.stack.setCurrentWidget(self.viewer_page)
-        self.set_modality(0)
+        selected_modality = False
+        for i, button in enumerate(self.modality_buttons):
+            if button.isEnabled():
+                self.set_modality(i)
+                selected_modality = True
+                break
+        if not selected_modality:
+            self.format_title.setText("No available modality")
+            self.format_detail.setText("No compatible data found for this patient.")
+            self.angio_viewer.show_placeholder("No compatible data found for this patient")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
 
     def set_modality(self, row: int):
+        if row < 0 or row >= len(self.formats):
+            return
+        if not self.modality_buttons[row].isEnabled():
+            return
         self.format_list.blockSignals(True)
         self.format_list.setCurrentRow(row)
         self.format_list.blockSignals(False)
@@ -223,24 +254,29 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_format_changed(self, row):
         if self.current_patient is None:
             return
+        if row < 0 or row >= len(self.formats):
+            return
 
         self.echo_viewer.stop_video()
 
         format_data = self.formats[row]
+        modality_id = format_data["id"]
         modality_label = format_data["label"]
-        self.current_modality_label = modality_label
+        self.current_modality_id = modality_id
         self.format_title.setText(modality_label)
         self.format_detail.setText(format_data["detail"])
         if hasattr(self, "modality_buttons"):
             for i, button in enumerate(self.modality_buttons):
                 button.setChecked(i == row)
 
-        if modality_label == "ECG":
+        if modality_id == "ecg":
             self._display_ecg(self.current_patient)
-        elif modality_label == "Cardiac Angiography":
+        elif modality_id == "angio":
             self._display_angio(self.current_patient)
-        elif modality_label == "Echocardiography":
+        elif modality_id == "echo":
             self._display_echo(self.current_patient)
+        else:
+            self._display_generic_modality(self.current_patient, modality_id, modality_label)
 
     def _display_ecg(self, patient_id: str):
         ecg_data = self.data_loader.load_ecg(patient_id)
@@ -326,13 +362,47 @@ class MainWindow(QtWidgets.QMainWindow):
             self.echo_viewer.show_placeholder(f"Error displaying Echo: {str(e)}")
             self.content_stack.setCurrentWidget(self.echo_viewer)
 
+    def _display_generic_modality(self, patient_id: str, modality_id: str, modality_label: str):
+        payload = self.data_loader.load_modality(patient_id, modality_id)
+        if payload is None:
+            self.angio_viewer.show_placeholder(f"{modality_label} data not found")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
+            return
+
+        data, metadata = payload
+        try:
+            if isinstance(data, np.ndarray) and data.ndim in (2, 3):
+                temp_file = self.visualizer.frame_to_temp_file(data)
+                self.angio_viewer.set_image_file(temp_file)
+                self.content_stack.setCurrentWidget(self.angio_viewer)
+                size = metadata.get("size", metadata.get("shape", (0, 0)))
+                self.format_detail.setText(f"{modality_label} - {size[0]}×{size[1]}")
+                return
+
+            if isinstance(data, list) and data and isinstance(data[0], np.ndarray):
+                self.echo_viewer.set_echo_data(data, metadata)
+                self.content_stack.setCurrentWidget(self.echo_viewer)
+                fps = metadata.get("fps", 30) or 30
+                self.format_detail.setText(f"{modality_label} - {len(data)} frames @ {fps:.1f} fps")
+                return
+
+            self.angio_viewer.show_placeholder(
+                f"{modality_label} loaded, but no renderer is defined for type {type(data).__name__}"
+            )
+            self.content_stack.setCurrentWidget(self.angio_viewer)
+        except Exception as e:
+            self.angio_viewer.show_placeholder(f"Error displaying {modality_label}: {str(e)}")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
+
     def show_patients(self):
+        self._populate_patient_list()
         self.stack.setCurrentWidget(self.patient_page)
         self.echo_viewer.reset()
+        self.patient_title.setVisible(False)
 
     def save_all_ecg_as_images(self, output_format: str = "png") -> dict:
         results = {}
-        for patient_id in self.patients:
+        for patient_id in self.data_loader.list_patients():
             try:
                 ecg_data = self.data_loader.load_ecg(patient_id)
                 if ecg_data is None:

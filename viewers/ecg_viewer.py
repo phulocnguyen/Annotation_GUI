@@ -59,10 +59,10 @@ class ECGViewerWidget(QtWidgets.QWidget):
         self._grid_axes = []
 
     def _configure_toolbar(self) -> None:
-        """Reduce toolbar size, remove Save, and improve icon visibility."""
+        """Reduce toolbar size and hide unsupported actions."""
         for action in list(self.toolbar.actions()):
             text = (action.text() or "").lower()
-            if "save" in text:
+            if any(keyword in text for keyword in ("save", "subplot", "customize", "edit")):
                 self.toolbar.removeAction(action)
 
     def set_signal(self, signal, max_time: int = 2000) -> None:
