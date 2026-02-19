@@ -7,22 +7,14 @@ Includes interactive ECG 12-lead grid with single-lead mode.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
-
 import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
 
 from dataloader import PatientDataLoader
 from visualizer import PatientVisualizer
-
-LEAD_NAMES = [
-    "I", "II", "III",
-    "aVR", "aVL", "aVF",
-    "V1", "V2", "V3", "V4", "V5", "V6"
-]
+from viewers.angio_viewer import AngioViewerWidget
+from viewers.ecg_viewer import ECGViewerWidget
+from viewers.echo_viewer import EchoViewerWidget
 
 
 class SeparatorDelegate(QtWidgets.QStyledItemDelegate):
@@ -38,195 +30,6 @@ class SeparatorDelegate(QtWidgets.QStyledItemDelegate):
             painter.drawLine(rect.left() + 10, y, rect.right() - 10, y)
 
 
-class ECGViewerWidget(QtWidgets.QWidget):
-    """Interactive ECG viewer with grid and single-lead modes."""
-
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(parent)
-        self.current_mode: str = "grid"
-        self.selected_lead: Optional[int] = None
-        self.signal: Optional[np.ndarray] = None
-        self.max_time: int = 2000
-
-        self.figure = Figure(constrained_layout=False)
-        self.canvas = FigureCanvas(self.figure)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-        self.toolbar.setMovable(False)
-        self.toolbar.setFloatable(False)
-        self.toolbar.setIconSize(QtCore.QSize(16, 16))
-        self.toolbar.setToolButtonStyle(
-            QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon
-        )
-        self._configure_toolbar()
-        self.toolbar.setVisible(False)
-
-        self.back_button = QtWidgets.QPushButton("Return")
-        self.back_button.setObjectName("ECGBackButton")
-        self.back_button.setVisible(False)
-        self.back_button.clicked.connect(self.show_grid_mode)
-
-        top_bar = QtWidgets.QHBoxLayout()
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        top_bar.setSpacing(8)
-        top_bar.addWidget(self.back_button, alignment=QtCore.Qt.AlignmentFlag.AlignLeft)
-        top_bar.addStretch(1)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addLayout(top_bar)
-        layout.addWidget(self.toolbar)
-        layout.addWidget(self.canvas, 1)
-
-        self.canvas.mpl_connect("button_press_event", self.on_click)
-        self._grid_axes = []
-
-    def _configure_toolbar(self) -> None:
-        """Reduce toolbar size, remove Save, and improve icon visibility."""
-        for action in list(self.toolbar.actions()):
-            text = (action.text() or "").lower()
-            if "save" in text:
-                self.toolbar.removeAction(action)
-
-    def set_signal(self, signal, max_time: int = 2000) -> None:
-        if hasattr(signal, "detach"):
-            signal = signal.detach().cpu().numpy()
-        signal = np.asarray(signal)
-        if signal.ndim != 2 or signal.shape[0] != 12:
-            raise ValueError("signal must have shape (12, T)")
-
-        self.signal = signal
-        self.max_time = max_time
-        self.show_grid_mode()
-
-    def show_grid_mode(self) -> None:
-        if self.signal is None:
-            return
-        self.current_mode = "grid"
-        self.selected_lead = None
-        self.back_button.setVisible(False)
-        self.back_button.setEnabled(False)
-        self.toolbar.setVisible(False)
-        self.toolbar.setEnabled(False)
-
-        self._render_grid()
-
-    def show_single_mode(self, lead_index: int) -> None:
-        if self.signal is None:
-            return
-        if lead_index < 0 or lead_index >= 12:
-            return
-
-        self.current_mode = "single"
-        self.selected_lead = lead_index
-        self.back_button.setVisible(True)
-        self.back_button.setEnabled(True)
-        self.toolbar.setVisible(True)
-        self.toolbar.setEnabled(True)
-
-        self._render_single()
-
-    def on_click(self, event) -> None:
-        if self.current_mode != "grid":
-            return
-        if event.inaxes is None:
-            return
-
-        for i, ax in enumerate(self._grid_axes):
-            if event.inaxes == ax:
-                self.show_single_mode(i)
-                return
-
-    def _render_grid(self) -> None:
-        if self.signal is None:
-            return
-        self.figure.clear()
-        self._grid_axes = []
-
-        t_len = min(self.signal.shape[1], self.max_time)
-        axes = self.figure.subplots(6, 2, sharex=True)
-
-        for i in range(12):
-            row = i // 2
-            col = i % 2
-            ax = axes[row, col]
-            ax.plot(self.signal[i, :t_len], linewidth=1.0)
-            ax.set_ylabel(LEAD_NAMES[i], rotation=0, labelpad=25)
-            ax.grid(alpha=0.3)
-            self._grid_axes.append(ax)
-
-        axes[-1, -1].set_xlabel("Time (samples)")
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
-
-    def _render_single(self) -> None:
-        if self.signal is None or self.selected_lead is None:
-            return
-        lead_index = self.selected_lead
-        self.figure.clear()
-        t_len = min(self.signal.shape[1], self.max_time)
-
-        ax = self.figure.add_subplot(1, 1, 1)
-        ax.plot(self.signal[lead_index, :t_len], linewidth=1.2)
-        ax.set_title(f"Lead {LEAD_NAMES[lead_index]}")
-        ax.set_ylabel(LEAD_NAMES[lead_index], rotation=0, labelpad=25)
-        ax.set_xlabel("Time (samples)")
-        ax.grid(alpha=0.3)
-
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        if self.signal is None:
-            return
-        if self.current_mode == "grid":
-            QtCore.QTimer.singleShot(0, self._render_grid)
-        elif self.current_mode == "single":
-            QtCore.QTimer.singleShot(0, self._render_single)
-
-
-class ImageViewer(QtWidgets.QGraphicsView):
-    """Simple image viewer with wheel zoom."""
-
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(parent)
-        self.setScene(QtWidgets.QGraphicsScene(self))
-        self._pixmap_item = QtWidgets.QGraphicsPixmapItem()
-        self.scene().addItem(self._pixmap_item)
-        self.setRenderHints(
-            QtGui.QPainter.RenderHint.Antialiasing
-            | QtGui.QPainter.RenderHint.SmoothPixmapTransform
-        )
-        self.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(
-            QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse
-        )
-        self.setResizeAnchor(
-            QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse
-        )
-        self._zoom = 0
-
-    def set_image(self, pixmap: QtGui.QPixmap) -> None:
-        self._pixmap_item.setPixmap(pixmap)
-        self._zoom = 0
-        self.fitInView(self._pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-
-    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
-        if self._pixmap_item.pixmap().isNull():
-            return
-        zoom_in = event.angleDelta().y() > 0
-        factor = 1.15 if zoom_in else 1 / 1.15
-        self._zoom += 1 if zoom_in else -1
-        if self._zoom < -10:
-            self._zoom = -10
-            return
-        if self._zoom > 30:
-            self._zoom = 30
-            return
-        self.scale(factor, factor)
-
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, data_dir: str = "./data"):
         super().__init__()
@@ -238,13 +41,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.visualizer = PatientVisualizer()
         self.patients = ["p001", "p002", "p003", "p004"]
         self.current_patient = None
-        self.temp_files = []
-        self.current_echo_frames = None
-        self.current_frame_index = 0
-        self.video_timer = QtCore.QTimer()
-        self.video_timer.timeout.connect(self.play_next_frame)
-        self.is_video_playing = False
-        self.current_echo_metadata = None
         self.current_modality_label = None
 
         self.formats = [
@@ -390,87 +186,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.format_list.currentRowChanged.connect(self.on_format_changed)
         self.format_list.setVisible(False)
 
-        self.image_viewer = ImageViewer()
-        self.image_viewer.setObjectName("ImageFrame")
-        self.image_viewer.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-
-        self.echo_label = QtWidgets.QLabel()
-        self.echo_label.setObjectName("EchoFrame")
-        self.echo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.echo_label.setScaledContents(False)
-        self.echo_label.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
-        self.echo_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-        self._echo_pixmap_orig = None
-        self.echo_container = QtWidgets.QWidget()
-        echo_stack = QtWidgets.QStackedLayout(self.echo_container)
-        echo_stack.setStackingMode(QtWidgets.QStackedLayout.StackingMode.StackAll)
-        echo_stack.setContentsMargins(0, 0, 0, 0)
-        echo_stack.addWidget(self.echo_label)
-
-        self.echo_overlay_root = QtWidgets.QWidget()
-        overlay_layout = QtWidgets.QVBoxLayout(self.echo_overlay_root)
-        overlay_layout.setContentsMargins(12, 12, 12, 12)
-        overlay_layout.addStretch(1)
-        overlay_row = QtWidgets.QHBoxLayout()
-        overlay_row.addStretch(1)
-        self.echo_overlay_panel = QtWidgets.QFrame()
-        self.echo_overlay_panel.setObjectName("EchoOverlayPanel")
-        panel_layout = QtWidgets.QGridLayout(self.echo_overlay_panel)
-        panel_layout.setContentsMargins(8, 6, 8, 6)
-        panel_layout.setHorizontalSpacing(8)
-        panel_layout.setVerticalSpacing(6)
-
-        self.echo_frame_title = QtWidgets.QLabel("Frame :")
-        self.echo_frame_title.setObjectName("EchoOverlayLabel")
-        self.echo_speed_title = QtWidgets.QLabel("Speed :")
-        self.echo_speed_title.setObjectName("EchoOverlayLabel")
-
-        self.echo_frame_value = QtWidgets.QWidget()
-        frame_value_layout = QtWidgets.QHBoxLayout(self.echo_frame_value)
-        frame_value_layout.setContentsMargins(0, 0, 0, 0)
-        frame_value_layout.setSpacing(2)
-        self.echo_frame_current_label = QtWidgets.QLabel("0")
-        self.echo_frame_current_label.setObjectName("EchoOverlayLabel")
-        self.echo_frame_current_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self.echo_frame_slash_label = QtWidgets.QLabel("/")
-        self.echo_frame_slash_label.setObjectName("EchoOverlayLabel")
-        self.echo_frame_total_label = QtWidgets.QLabel("0")
-        self.echo_frame_total_label.setObjectName("EchoOverlayLabel")
-        self.echo_frame_total_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        frame_value_layout.addWidget(self.echo_frame_current_label)
-        frame_value_layout.addWidget(self.echo_frame_slash_label)
-        frame_value_layout.addWidget(self.echo_frame_total_label)
-
-        self.echo_speed_value_label = QtWidgets.QLabel("0x")
-        self.echo_speed_value_label.setObjectName("EchoOverlayLabel")
-        self.echo_speed_value_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignLeft
-        )
-
-        panel_layout.addWidget(self.echo_frame_title, 0, 0)
-        panel_layout.addWidget(self.echo_frame_value, 0, 1)
-        panel_layout.addWidget(self.echo_speed_title, 1, 0)
-        panel_layout.addWidget(self.echo_speed_value_label, 1, 1)
-        overlay_row.addWidget(self.echo_overlay_panel)
-        overlay_layout.addLayout(overlay_row)
-        echo_stack.addWidget(self.echo_overlay_root)
-        self.echo_overlay_root.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
-        self.echo_overlay_root.setVisible(False)
-
+        self.angio_viewer = AngioViewerWidget()
+        self.echo_viewer = EchoViewerWidget(self.visualizer)
         self.ecg_viewer = ECGViewerWidget()
         self.ecg_viewer.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -478,60 +195,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         self.content_stack = QtWidgets.QStackedWidget()
-        self.content_stack.addWidget(self.image_viewer)  # Angio (zoom)
-        self.content_stack.addWidget(self.echo_container)    # Echo (no zoom)
+        self.content_stack.addWidget(self.angio_viewer)  # Angio (zoom)
+        self.content_stack.addWidget(self.echo_viewer)   # Echo (with controls)
         self.content_stack.addWidget(self.ecg_viewer)
 
-        # Video control panel for echo
-        self.controls_bar = QtWidgets.QWidget()
-        controls_layout = QtWidgets.QHBoxLayout(self.controls_bar)
-        controls_layout.setSpacing(8)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        self.controls_bar.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        self.controls_bar.setMinimumHeight(30)
-
-        self.speed_combo = QtWidgets.QComboBox()
-        self.speed_combo.setObjectName("SpeedCombo")
-        self.speed_combo.addItems(["0.25x", "0.5x", "0.75x", "1x"])
-        self.speed_combo.setCurrentText("1x")
-        self.speed_combo.currentTextChanged.connect(self.on_speed_changed)
-        self.playback_speed = 1.0
-
-        self.play_pause_button = QtWidgets.QPushButton("Play")
-        self.play_pause_button.setObjectName("PlayPauseButton")
-        self.play_pause_button.clicked.connect(self.toggle_video_playback)
-        self.play_pause_button.setMaximumWidth(80)
-        self.play_pause_button.setVisible(False)
-
-        self.stop_button = QtWidgets.QPushButton("Stop")
-        self.stop_button.setObjectName("StopButton")
-        self.stop_button.clicked.connect(self.stop_video)
-        self.stop_button.setMaximumWidth(80)
-        self.stop_button.setVisible(False)
-
-        self.frame_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.frame_slider.setObjectName("FrameSlider")
-        self.frame_slider.setVisible(False)
-        self.frame_slider.sliderMoved.connect(self.on_frame_slider_moved)
-        self.frame_slider.sliderPressed.connect(self.on_frame_slider_pressed)
-        self.frame_slider.sliderReleased.connect(self.on_frame_slider_released)
-
-        self.frame_label = QtWidgets.QLabel("0/0")
-        self.frame_label.setMaximumWidth(60)
-        self.frame_label.setVisible(False)
-
-        controls_layout.addWidget(self.speed_combo)
-
-        controls_layout.addWidget(self.play_pause_button)
-        controls_layout.addWidget(self.stop_button)
-        controls_layout.addWidget(self.frame_slider)
-        controls_layout.addWidget(self.frame_label)
-
         viewer.addWidget(self.content_stack, 1)
-        viewer.addWidget(self.controls_bar)
 
         layout.addLayout(header)
         layout.addLayout(viewer, 1)
@@ -556,7 +224,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.current_patient is None:
             return
 
-        self.stop_video()
+        self.echo_viewer.stop_video()
 
         format_data = self.formats[row]
         modality_label = format_data["label"]
@@ -568,22 +236,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 button.setChecked(i == row)
 
         if modality_label == "ECG":
-            self._hide_video_controls()
             self._display_ecg(self.current_patient)
         elif modality_label == "Cardiac Angiography":
-            self._hide_video_controls()
             self._display_angio(self.current_patient)
         elif modality_label == "Echocardiography":
-            self._show_video_controls()
             self._display_echo(self.current_patient)
 
     def _display_ecg(self, patient_id: str):
-        self.current_echo_frames = None
-        self.current_echo_metadata = None
-
         ecg_data = self.data_loader.load_ecg(patient_id)
         if ecg_data is None:
-            self._show_placeholder("ECG data not found")
+            self.angio_viewer.show_placeholder("ECG data not found")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
             return
 
         data, metadata = ecg_data
@@ -598,58 +261,47 @@ class MainWindow(QtWidgets.QMainWindow):
 
             # Otherwise display as image
             temp_file = self.visualizer.frame_to_temp_file(data)
-            self._display_angio_image_file(temp_file)
-            self.content_stack.setCurrentWidget(self.image_viewer)
-            self.temp_files.append(temp_file)
+            self.angio_viewer.set_image_file(temp_file)
+            self.content_stack.setCurrentWidget(self.angio_viewer)
 
             size = metadata.get("size", metadata.get("shape", (0, 0)))
             self.format_detail.setText(f"12-lead ECG - {size[0]}×{size[1]} pixels")
         except Exception as e:
-            self._show_placeholder(f"Error displaying ECG: {str(e)}")
+            self.angio_viewer.show_placeholder(f"Error displaying ECG: {str(e)}")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
 
     def _display_angio(self, patient_id: str):
-        self.current_echo_frames = None
-        self.current_echo_metadata = None
-
         angio_data = self.data_loader.load_angio(patient_id)
         if angio_data is None:
-            self._show_placeholder("Angiography image not found")
+            self.angio_viewer.show_placeholder("Angiography image not found")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
             return
 
         data, metadata = angio_data
         try:
             temp_file = self.visualizer.frame_to_temp_file(data)
-            self._display_angio_image_file(temp_file)
-            self.content_stack.setCurrentWidget(self.image_viewer)
-            self.temp_files.append(temp_file)
+            self.angio_viewer.set_image_file(temp_file)
+            self.content_stack.setCurrentWidget(self.angio_viewer)
             self.format_detail.setText(
                 f"X-ray imaging - {metadata['size'][0]}×{metadata['size'][1]} pixels"
             )
         except Exception as e:
-            self._show_placeholder(f"Error displaying Angiography: {str(e)}")
+            self.angio_viewer.show_placeholder(f"Error displaying Angiography: {str(e)}")
+            self.content_stack.setCurrentWidget(self.angio_viewer)
 
     def _display_echo(self, patient_id: str):
         echo_data = self.data_loader.load_echo(patient_id)
         if echo_data is None:
-            self._show_placeholder("Echocardiography video not found")
-            self.play_pause_button.setEnabled(False)
-            self.stop_button.setEnabled(False)
-            self.frame_slider.setEnabled(False)
+            self.echo_viewer.show_placeholder("Echocardiography video not found")
+            self.content_stack.setCurrentWidget(self.echo_viewer)
             return
 
         frames, metadata = echo_data
         try:
             if frames and len(frames) > 0:
-                self.current_echo_frames = frames
-                self.current_echo_metadata = metadata
-                self.current_frame_index = 0
                 fps = metadata.get("fps", 30) or 30
                 if fps <= 0:
                     fps = 30
-                self.echo_fps = fps
-                frame_interval = int(1000 / (fps * self.playback_speed))
-                self.video_timer.setInterval(frame_interval)
-
                 detail_text = f"Ultrasound imaging - {len(frames)} frames @ {fps:.1f} fps"
 
                 if "filelist_data" in metadata:
@@ -665,257 +317,18 @@ class MainWindow(QtWidgets.QMainWindow):
                     detail_text += f"\nVolume tracings: {len(tracings)} frames marked"
 
                 self.format_detail.setText(detail_text)
-
-                self.frame_slider.setMaximum(len(frames) - 1)
-                self.frame_slider.setValue(0)
-                self._update_echo_overlay_widths(len(frames))
-                self.update_frame_label()
-
-                self.display_frame(0)
-                self.content_stack.setCurrentWidget(self.echo_container)
-
-                self.is_video_playing = False
-                self.play_pause_button.setText("Play")
-                self.play_pause_button.setEnabled(True)
-                self.stop_button.setEnabled(True)
-                self.frame_slider.setEnabled(True)
+                self.echo_viewer.set_echo_data(frames, metadata)
+                self.content_stack.setCurrentWidget(self.echo_viewer)
             else:
-                self._show_placeholder("Echocardiography video empty")
-                self.play_pause_button.setEnabled(False)
-                self.stop_button.setEnabled(False)
-                self.frame_slider.setEnabled(False)
+                self.echo_viewer.show_placeholder("Echocardiography video empty")
+                self.content_stack.setCurrentWidget(self.echo_viewer)
         except Exception as e:
-            self._show_placeholder(f"Error displaying Echo: {str(e)}")
-
-    def play_next_frame(self):
-        if self.current_echo_frames is None or len(self.current_echo_frames) == 0:
-            self.video_timer.stop()
-            self.is_video_playing = False
-            self.play_pause_button.setText("Play")
-            return
-
-        self.display_frame(self.current_frame_index)
-
-        self.current_frame_index += 1
-        if self.current_frame_index >= len(self.current_echo_frames):
-            self.current_frame_index = 0
-
-        self.frame_slider.blockSignals(True)
-        self.frame_slider.setValue(self.current_frame_index)
-        self.frame_slider.blockSignals(False)
-        self.update_frame_label()
-
-    def display_frame(self, frame_index: int):
-        if self.current_echo_frames is None or frame_index >= len(self.current_echo_frames):
-            return
-
-        frame = self.current_echo_frames[frame_index].copy()
-        if self.current_echo_metadata and "volume_tracings" in self.current_echo_metadata:
-            volume_tracings = self.current_echo_metadata["volume_tracings"]
-            if frame_index in volume_tracings:
-                frame = PatientVisualizer.draw_tracings_on_frame(
-                    frame, volume_tracings[frame_index]
-                )
-
-        temp_file = self.visualizer.frame_to_temp_file(frame)
-        self._display_echo_image_file(temp_file)
-        if temp_file not in self.temp_files:
-            self.temp_files.append(temp_file)
-
-    def toggle_video_playback(self):
-        if self.current_echo_frames is None or len(self.current_echo_frames) == 0:
-            if self.current_patient:
-                self._display_echo(self.current_patient)
-            if self.current_echo_frames is None or len(self.current_echo_frames) == 0:
-                return
-
-        if self.is_video_playing:
-            self.video_timer.stop()
-            self.is_video_playing = False
-            self.play_pause_button.setText("Play")
-        else:
-            self._apply_playback_speed()
-            self.video_timer.start()
-            self.is_video_playing = True
-            self.play_pause_button.setText("Pause")
-
-    def stop_video(self):
-        if self.video_timer.isActive():
-            self.video_timer.stop()
-        self.is_video_playing = False
-        if self.current_echo_frames is not None and len(self.current_echo_frames) > 0:
-            self.current_frame_index = 0
-            self.frame_slider.blockSignals(True)
-            self.frame_slider.setValue(0)
-            self.frame_slider.blockSignals(False)
-            self.display_frame(0)
-            self.play_pause_button.setText("Play")
-            self.update_frame_label()
-
-    def on_frame_slider_moved(self, value: int):
-        if self.current_echo_frames is None:
-            return
-        self.current_frame_index = value
-        self.display_frame(value)
-        self.update_frame_label()
-
-    def on_frame_slider_pressed(self):
-        if self.is_video_playing:
-            self.video_timer.stop()
-            self.is_video_playing = False
-            self.play_pause_button.setText("Play")
-
-    def on_frame_slider_released(self):
-        # Keep paused after scrubbing; user can press Play to resume
-        pass
-
-    def on_speed_changed(self, text: str):
-        try:
-            self.playback_speed = float(text.replace("x", ""))
-        except ValueError:
-            self.playback_speed = 1.0
-        self._update_echo_overlay_widths(len(self.current_echo_frames) if self.current_echo_frames else 0)
-        self._update_echo_overlay_text()
-        if self.is_video_playing:
-            self._apply_playback_speed()
-
-    def _apply_playback_speed(self):
-        if hasattr(self, "echo_fps") and self.echo_fps:
-            frame_interval = int(1000 / (self.echo_fps * self.playback_speed))
-            self.video_timer.setInterval(frame_interval)
-
-    def update_frame_label(self):
-        if self.current_echo_frames is not None:
-            display_index = min(self.current_frame_index + 1, len(self.current_echo_frames))
-            self.frame_label.setText(
-                f"{display_index}/{len(self.current_echo_frames)}"
-            )
-            self._update_echo_overlay_text()
-
-    def _update_echo_overlay_text(self):
-        if not hasattr(self, "echo_frame_current_label") or not hasattr(self, "echo_speed_value_label"):
-            return
-        total = len(self.current_echo_frames) if self.current_echo_frames else 0
-        display_index = min(self.current_frame_index + 1, total) if total else 0
-        speed_text = self.speed_combo.currentText() if hasattr(self, "speed_combo") else f"{self.playback_speed:g}x"
-        self.echo_frame_current_label.setText(str(display_index))
-        self.echo_frame_total_label.setText(str(total))
-        self.echo_speed_value_label.setText(speed_text)
-
-    def _update_echo_overlay_widths(self, total_frames: int) -> None:
-        if not hasattr(self, "echo_frame_current_label") or not hasattr(self, "echo_speed_value_label"):
-            return
-        label_width = max(
-            self.echo_frame_title.fontMetrics().horizontalAdvance("Frame :"),
-            self.echo_speed_title.fontMetrics().horizontalAdvance("Speed :"),
-        )
-        self.echo_frame_title.setFixedWidth(label_width + 2)
-        self.echo_speed_title.setFixedWidth(label_width + 2)
-
-        total_digits = max(1, len(str(total_frames)))
-        max_num = "9" * total_digits
-        num_width = self.echo_frame_current_label.fontMetrics().horizontalAdvance(max_num)
-        self.echo_frame_current_label.setFixedWidth(num_width + 2)
-        self.echo_frame_total_label.setFixedWidth(num_width + 2)
-
-        if hasattr(self, "speed_combo"):
-            speed_items = [self.speed_combo.itemText(i) for i in range(self.speed_combo.count())]
-            speed_longest = max(speed_items, key=len) if speed_items else f"{self.playback_speed:g}x"
-        else:
-            speed_longest = f"{self.playback_speed:g}x"
-        speed_width = self.echo_speed_value_label.fontMetrics().horizontalAdvance(speed_longest)
-        self.echo_speed_value_label.setFixedWidth(speed_width + 2)
-
-    def _show_video_controls(self):
-        self.speed_combo.setVisible(True)
-        self.play_pause_button.setVisible(True)
-        self.stop_button.setVisible(True)
-        self.frame_slider.setVisible(True)
-        self.frame_label.setVisible(True)
-        if hasattr(self, "controls_bar"):
-            self.controls_bar.setVisible(True)
-            self.controls_bar.raise_()
-        if hasattr(self, "echo_overlay_root"):
-            self.echo_overlay_root.setVisible(True)
-            self.echo_overlay_root.raise_()
-
-    def _hide_video_controls(self):
-        self.speed_combo.setVisible(False)
-        self.play_pause_button.setVisible(False)
-        self.stop_button.setVisible(False)
-        self.frame_slider.setVisible(False)
-        self.frame_label.setVisible(False)
-        if hasattr(self, "controls_bar"):
-            self.controls_bar.setVisible(False)
-        if hasattr(self, "echo_overlay_root"):
-            self.echo_overlay_root.setVisible(False)
-
-    def _display_angio_image_file(self, file_path: str):
-        pixmap = QtGui.QPixmap(file_path)
-        if not pixmap.isNull():
-            self.image_viewer.set_image(pixmap)
-        else:
-            self._show_placeholder("Failed to load image")
-
-    def _display_echo_image_file(self, file_path: str):
-        pixmap = QtGui.QPixmap(file_path)
-        if not pixmap.isNull():
-            self._echo_pixmap_orig = pixmap
-            self._apply_echo_pixmap()
-        else:
-            self._show_placeholder("Failed to load image")
-
-    def _apply_echo_pixmap(self):
-        if self._echo_pixmap_orig is None:
-            return
-        pixmap = self._echo_pixmap_orig
-        label_size = self.echo_label.size()
-        if label_size.width() <= 0 or label_size.height() <= 0:
-            return
-        is_portrait = pixmap.height() >= pixmap.width()
-        if is_portrait:
-            scaled = pixmap.scaled(
-                label_size,
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
-        else:
-            # Landscape: do not upscale, only scale down if needed
-            if pixmap.width() > label_size.width() or pixmap.height() > label_size.height():
-                scaled = pixmap.scaled(
-                    label_size,
-                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
-            else:
-                scaled = pixmap
-        self.echo_label.setPixmap(scaled)
-
-    def resizeEvent(self, event: QtGui.QResizeEvent):
-        super().resizeEvent(event)
-        if self.current_modality_label == "Echocardiography":
-            self._apply_echo_pixmap()
-
-    def _show_placeholder(self, message: str):
-        pixmap = QtGui.QPixmap(520, 360)
-        pixmap.fill(QtGui.QColor("#fffdf7"))
-        painter = QtGui.QPainter(pixmap)
-        painter.setPen(QtGui.QColor("#6b665e"))
-        painter.setFont(QtGui.QFont("Arial", 10))
-        painter.drawText(pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, message)
-        painter.end()
-        if self.current_modality_label == "Cardiac Angiography":
-            self.image_viewer.set_image(pixmap)
-            self.content_stack.setCurrentWidget(self.image_viewer)
-        else:
-            self.echo_label.setPixmap(pixmap)
-            self.content_stack.setCurrentWidget(self.echo_container)
+            self.echo_viewer.show_placeholder(f"Error displaying Echo: {str(e)}")
+            self.content_stack.setCurrentWidget(self.echo_viewer)
 
     def show_patients(self):
         self.stack.setCurrentWidget(self.patient_page)
-        self.stop_video()
-        self.current_echo_frames = None
-        self.current_echo_metadata = None
+        self.echo_viewer.reset()
 
     def save_all_ecg_as_images(self, output_format: str = "png") -> dict:
         results = {}
