@@ -48,11 +48,46 @@ class EchoViewerWidget(QtWidgets.QWidget):
         self.echo_overlay_root = QtWidgets.QWidget()
         overlay_layout = QtWidgets.QVBoxLayout(self.echo_overlay_root)
         overlay_layout.setContentsMargins(12, 12, 12, 12)
+        overlay_layout.setSpacing(10)
+
+        metrics_row = QtWidgets.QHBoxLayout()
+        metrics_row.addStretch(1)
+        self.echo_metrics_panel = QtWidgets.QFrame()
+        self.echo_metrics_panel.setObjectName("EchoOverlayPanel")
+        self.echo_metrics_panel.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        metrics_panel_layout = QtWidgets.QVBoxLayout(self.echo_metrics_panel)
+        metrics_panel_layout.setContentsMargins(12, 10, 12, 10)
+        metrics_panel_layout.setSpacing(0)
+
+        self.echo_metrics_label = QtWidgets.QLabel("Display : -")
+        self.echo_metrics_label.setObjectName("EchoOverlayLabel")
+        self.echo_metrics_label.setWordWrap(True)
+        self.echo_metrics_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        metrics_font = self.echo_metrics_label.font()
+        metrics_font.setPointSize(metrics_font.pointSize() + 2)
+        self.echo_metrics_label.setFont(metrics_font)
+        self.echo_metrics_label.setMinimumWidth(240)
+        self.echo_metrics_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+        )
+        metrics_panel_layout.addWidget(self.echo_metrics_label)
+        metrics_row.addWidget(self.echo_metrics_panel)
+        overlay_layout.addLayout(metrics_row)
+
         overlay_layout.addStretch(1)
         overlay_row = QtWidgets.QHBoxLayout()
         overlay_row.addStretch(1)
         self.echo_overlay_panel = QtWidgets.QFrame()
         self.echo_overlay_panel.setObjectName("EchoOverlayPanel")
+        self.echo_overlay_panel.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         panel_layout = QtWidgets.QGridLayout(self.echo_overlay_panel)
         panel_layout.setContentsMargins(8, 6, 8, 6)
         panel_layout.setHorizontalSpacing(8)
@@ -62,6 +97,10 @@ class EchoViewerWidget(QtWidgets.QWidget):
         self.echo_frame_title.setObjectName("EchoOverlayLabel")
         self.echo_speed_title = QtWidgets.QLabel("Speed :")
         self.echo_speed_title.setObjectName("EchoOverlayLabel")
+        overlay_title_font = self.echo_frame_title.font()
+        overlay_title_font.setPointSize(overlay_title_font.pointSize() + 5)
+        self.echo_frame_title.setFont(overlay_title_font)
+        self.echo_speed_title.setFont(overlay_title_font)
 
         self.echo_frame_value = QtWidgets.QWidget()
         frame_value_layout = QtWidgets.QHBoxLayout(self.echo_frame_value)
@@ -79,6 +118,11 @@ class EchoViewerWidget(QtWidgets.QWidget):
         self.echo_frame_total_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
+        overlay_value_font = self.echo_frame_current_label.font()
+        overlay_value_font.setPointSize(overlay_value_font.pointSize() + 5)
+        self.echo_frame_current_label.setFont(overlay_value_font)
+        self.echo_frame_slash_label.setFont(overlay_value_font)
+        self.echo_frame_total_label.setFont(overlay_value_font)
         frame_value_layout.addWidget(self.echo_frame_current_label)
         frame_value_layout.addWidget(self.echo_frame_slash_label)
         frame_value_layout.addWidget(self.echo_frame_total_label)
@@ -88,28 +132,28 @@ class EchoViewerWidget(QtWidgets.QWidget):
         self.echo_speed_value_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
+        self.echo_speed_value_label.setFont(overlay_value_font)
 
         panel_layout.addWidget(self.echo_frame_title, 0, 0)
         panel_layout.addWidget(self.echo_frame_value, 0, 1)
         panel_layout.addWidget(self.echo_speed_title, 1, 0)
         panel_layout.addWidget(self.echo_speed_value_label, 1, 1)
+        panel_layout.setColumnStretch(1, 1)
         overlay_row.addWidget(self.echo_overlay_panel)
         overlay_layout.addLayout(overlay_row)
         echo_stack.addWidget(self.echo_overlay_root)
-        self.echo_overlay_root.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
         self.echo_overlay_root.setVisible(False)
 
         self.controls_bar = QtWidgets.QWidget()
         controls_layout = QtWidgets.QHBoxLayout(self.controls_bar)
         controls_layout.setSpacing(8)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setContentsMargins(0, 4, 0, 4)
         self.controls_bar.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.controls_bar.setMinimumHeight(30)
+        self.controls_bar.setFixedHeight(44)
+        self.controls_bar.setVisible(True)
 
         self.speed_combo = QtWidgets.QComboBox()
         self.speed_combo.setObjectName("SpeedCombo")
@@ -149,8 +193,8 @@ class EchoViewerWidget(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        layout.addWidget(self.echo_container, 1)
         layout.addWidget(self.controls_bar)
+        layout.addWidget(self.echo_container, 1)
 
     def reset(self) -> None:
         self.stop_video()
@@ -199,6 +243,7 @@ class EchoViewerWidget(QtWidgets.QWidget):
         painter.end()
         self.echo_label.setPixmap(pixmap)
         self._echo_pixmap_orig = pixmap
+        self._update_display_metrics()
         self._show_video_controls()
 
     def play_next_frame(self):
@@ -345,6 +390,7 @@ class EchoViewerWidget(QtWidgets.QWidget):
         if not pixmap.isNull():
             self._echo_pixmap_orig = pixmap
             self._apply_echo_pixmap()
+            QtCore.QTimer.singleShot(0, self._apply_echo_pixmap)
         else:
             self.show_placeholder("Failed to load image")
 
@@ -372,7 +418,58 @@ class EchoViewerWidget(QtWidgets.QWidget):
             else:
                 scaled = pixmap
         self.echo_label.setPixmap(scaled)
+        self._update_display_metrics()
+
+    def get_display_metrics(self) -> dict:
+        content_rect = self.echo_label.contentsRect()
+        pixmap = self._echo_pixmap_orig
+        viewport_global = self.echo_label.mapToGlobal(content_rect.topLeft())
+        metrics = {
+            "viewport_size": (content_rect.width(), content_rect.height()),
+            "viewport_global_offset": (viewport_global.x(), viewport_global.y()),
+            "label_size": (content_rect.width(), content_rect.height()),
+            "source_size": (pixmap.width(), pixmap.height()) if pixmap is not None else (0, 0),
+            "display_rect": (0.0, 0.0, 0.0, 0.0),
+            "offset": (0.0, 0.0),
+            "scale": (0.0, 0.0),
+        }
+        if pixmap is None or content_rect.width() <= 0 or content_rect.height() <= 0:
+            return metrics
+
+        displayed = self.echo_label.pixmap()
+        if displayed is None or displayed.isNull():
+            return metrics
+
+        disp_w = displayed.width()
+        disp_h = displayed.height()
+        offset_x = content_rect.x() + (content_rect.width() - disp_w) / 2
+        offset_y = content_rect.y() + (content_rect.height() - disp_h) / 2
+        metrics["display_rect"] = (float(offset_x), float(offset_y), float(disp_w), float(disp_h))
+        metrics["offset"] = (float(offset_x), float(offset_y))
+        if pixmap.width() > 0 and pixmap.height() > 0:
+            metrics["scale"] = (disp_w / pixmap.width(), disp_h / pixmap.height())
+        return metrics
+
+    def _update_display_metrics(self) -> None:
+        metrics = self.get_display_metrics()
+        src_w, src_h = metrics["source_size"]
+        vp_w, vp_h = metrics["viewport_size"]
+        vp_gx, vp_gy = metrics["viewport_global_offset"]
+        disp_x, disp_y, disp_w, disp_h = metrics["display_rect"]
+        scale_x, _ = metrics["scale"]
+        self.echo_metrics_label.setText(
+            f"Source: {src_w} x {src_h} px\n"
+            f"Viewport: {vp_w} x {vp_h} px\n"
+            f"Viewport Offset: ({vp_gx}, {vp_gy})\n"
+            f"Rect: ({disp_x:.1f}, {disp_y:.1f}, {disp_w:.1f}, {disp_h:.1f})\n"
+            f"Offset: ({disp_x:.1f}, {disp_y:.1f})\n"
+            f"Scale: {scale_x:.4f}"
+        )
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_echo_pixmap()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(0, self._apply_echo_pixmap)

@@ -27,46 +27,64 @@ class ECGDataLoader:
         return hea_files[0].with_suffix("")
 
     def _find_ecg_image_path(self, patient_dir: Path) -> Optional[Path]:
+        ecg_png_path = patient_dir / "ecg.png"
+        if ecg_png_path.exists():
+            return ecg_png_path
+
         ecg_png_files = sorted(patient_dir.glob("ecg_visualization_*.png"))
         if not ecg_png_files:
             return None
         return ecg_png_files[0]
 
-    def has_data(self, patient_id: str) -> bool:
+    def has_raw_data(self, patient_id: str) -> bool:
         patient_dir = self._patient_dir(patient_id)
-        return (
-            self._find_record_path(patient_dir) is not None
-            or self._find_ecg_image_path(patient_dir) is not None
-        )
+        return self._find_record_path(patient_dir) is not None
 
-    def get_primary_path(self, patient_id: str) -> Optional[str]:
+    def has_image_data(self, patient_id: str) -> bool:
+        patient_dir = self._patient_dir(patient_id)
+        return self._find_ecg_image_path(patient_dir) is not None
+
+    def get_raw_primary_path(self, patient_id: str) -> Optional[str]:
         patient_dir = self._patient_dir(patient_id)
         record_path = self._find_record_path(patient_dir)
-        if record_path is not None:
-            return str(record_path.with_suffix(".hea"))
+        return str(record_path.with_suffix(".hea")) if record_path is not None else None
+
+    def get_image_primary_path(self, patient_id: str) -> Optional[str]:
+        patient_dir = self._patient_dir(patient_id)
         image_path = self._find_ecg_image_path(patient_dir)
         return str(image_path) if image_path is not None else None
 
-    def load(self, patient_id: str) -> Optional[DataPayload]:
+    def has_data(self, patient_id: str) -> bool:
+        return self.has_image_data(patient_id)
+
+    def get_primary_path(self, patient_id: str) -> Optional[str]:
+        return self.get_image_primary_path(patient_id)
+
+    def load_raw(self, patient_id: str) -> Optional[DataPayload]:
         patient_dir = self._patient_dir(patient_id)
-
         record_path = self._find_record_path(patient_dir)
-        if record_path is not None:
-            try:
-                signal, meta = wfdb.rdsamp(str(record_path))
-                signal = np.asarray(signal, dtype=np.float32).transpose(1, 0)
-                metadata = {
-                    "modality": "ECG",
-                    "format": "wfdb",
-                    "shape": signal.shape,
-                    "fs": meta.get("fs"),
-                    "sig_name": meta.get("sig_name"),
-                    "units": meta.get("units"),
-                }
-                return signal, metadata
-            except Exception as exc:
-                print(f"Error loading ECG wfdb for {patient_id}: {exc}")
+        if record_path is None:
+            return None
 
+        try:
+            signal, meta = wfdb.rdsamp(str(record_path))
+            signal = np.asarray(signal, dtype=np.float32).transpose(1, 0)
+            metadata = {
+                "modality": "ECG",
+                "format": "wfdb",
+                "shape": signal.shape,
+                "fs": meta.get("fs"),
+                "sig_name": meta.get("sig_name"),
+                "units": meta.get("units"),
+                "source_path": str(record_path.with_suffix(".hea")),
+            }
+            return signal, metadata
+        except Exception as exc:
+            print(f"Error loading ECG wfdb for {patient_id}: {exc}")
+            return None
+
+    def load_image(self, patient_id: str) -> Optional[DataPayload]:
+        patient_dir = self._patient_dir(patient_id)
         image_path = self._find_ecg_image_path(patient_dir)
         if image_path is None:
             return None
@@ -83,16 +101,20 @@ class ECGDataLoader:
 
             metadata = {
                 "modality": "ECG",
-                "format": "png",
+                "format": image_path.suffix.lower().lstrip("."),
                 "shape": img_array.shape,
                 "size": img.size,
                 "mode": img.mode,
                 "dimensions": {"width": width, "height": height, "channels": channels},
+                "source_path": str(image_path),
             }
             return img_array, metadata
         except Exception as exc:
-            print(f"Error loading ECG for {patient_id}: {exc}")
+            print(f"Error loading ECG image for {patient_id}: {exc}")
             return None
+
+    def load(self, patient_id: str) -> Optional[DataPayload]:
+        return self.load_image(patient_id)
 
 
 class EchoDataLoader:
@@ -262,6 +284,7 @@ class AngioDataLoader:
             path
             for path in image_files
             if not path.name.lower().startswith("ecg_visualization_")
+            and path.name.lower() != "ecg.png"
         ]
         if not image_files:
             return None
@@ -286,7 +309,7 @@ class AngioDataLoader:
             img = Image.open(image_file)
             img_array = np.array(img)
             metadata = {
-                "modality": "Cardiac Angiography",
+                "modality": "Angiography",
                 "format": image_file.suffix.lower().lstrip("."),
                 "shape": img_array.shape,
                 "mode": img.mode,
@@ -311,22 +334,25 @@ class PatientDataLoader:
         self.angio_loader = AngioDataLoader(self.data_dir)
 
         self.modalities = [
-            {"id": "ecg", "label": "ECG", "detail": "Electrocardiogram"},
-            {"id": "angio", "label": "Cardiac Angiography", "detail": "X-ray imaging"},
+            {"id": "ecg_image", "label": "ECG", "detail": "Electrocardiogram"},
+            {"id": "angio", "label": "Angiography", "detail": "X-ray imaging"},
             {"id": "echo", "label": "Echocardiography", "detail": "Ultrasound imaging"},
         ]
         self._modality_loaders: Dict[str, Callable[[str], Optional[DataPayload]]] = {
             "ecg": self.ecg_loader.load,
+            "ecg_image": self.ecg_loader.load_image,
             "angio": self.angio_loader.load,
             "echo": self.echo_loader.load,
         }
         self._modality_availability_checkers: Dict[str, Callable[[str], bool]] = {
             "ecg": self.ecg_loader.has_data,
+            "ecg_image": self.ecg_loader.has_image_data,
             "angio": self.angio_loader.has_data,
             "echo": self.echo_loader.has_data,
         }
         self._modality_primary_path_getters: Dict[str, Callable[[str], Optional[str]]] = {
             "ecg": self.ecg_loader.get_primary_path,
+            "ecg_image": self.ecg_loader.get_image_primary_path,
             "angio": self.angio_loader.get_primary_path,
             "echo": self.echo_loader.get_primary_path,
         }
@@ -334,7 +360,9 @@ class PatientDataLoader:
     def _normalize_modality_id(self, modality: str) -> str:
         normalized = modality.strip().lower()
         aliases = {
-            "electrocardiogram": "ecg",
+            "electrocardiogram": "ecg_image",
+            "electrocardiogram image": "ecg_image",
+            "ecg image": "ecg_image",
             "cardiac angiography": "angio",
             "angiography": "angio",
             "echocardiography": "echo",
@@ -400,6 +428,12 @@ class PatientDataLoader:
 
     def load_ecg(self, patient_id: str) -> Optional[DataPayload]:
         return self.ecg_loader.load(patient_id)
+
+    def load_ecg_raw(self, patient_id: str) -> Optional[DataPayload]:
+        return self.ecg_loader.load_raw(patient_id)
+
+    def load_ecg_image(self, patient_id: str) -> Optional[DataPayload]:
+        return self.ecg_loader.load_image(patient_id)
 
     def load_echo(self, patient_id: str) -> Optional[DataPayload]:
         return self.echo_loader.load(patient_id)

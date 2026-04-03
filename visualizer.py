@@ -136,8 +136,8 @@ class PatientVisualizer:
         fig, ax = plt.subplots(figsize=(10, 4), dpi=100)
         
         if len(ecg_data.shape) > 1:
-            # Multi-channel, plot first channel
-            ax.plot(ecg_data[:, 0], linewidth=0.8, color='#1f77b4')
+            # ECG signals are stored as (lead, time); plot the first lead over time.
+            ax.plot(ecg_data[0, :], linewidth=0.8, color='#1f77b4')
         else:
             ax.plot(ecg_data, linewidth=0.8, color='#1f77b4')
         
@@ -196,8 +196,8 @@ class PatientVisualizer:
         fig, ax = plt.subplots(figsize=(12, 5), dpi=100)
         
         if len(ecg_data.shape) > 1:
-            # Multi-channel, plot first channel
-            ax.plot(ecg_data[:, 0], linewidth=0.8, color='#1f77b4')
+            # ECG signals are stored as (lead, time); plot the first lead over time.
+            ax.plot(ecg_data[0, :], linewidth=0.8, color='#1f77b4')
         else:
             ax.plot(ecg_data, linewidth=0.8, color='#1f77b4')
         

@@ -89,12 +89,30 @@ class MainWindow(QtWidgets.QMainWindow):
             QSlider#FrameSlider::handle:horizontal { background: #007AFF; width: 12px; margin: -3px 0; border-radius: 6px; }
             QLabel#FormatTitle { font-size: 18px; font-weight: 600; color: #000000; }
             QLabel#FormatDetail { color: #000000; }
+            QLabel#ImageMetricsLabel {
+                color: #1f2937;
+                font-size: 13px;
+                font-weight: 600;
+                background: #f3f4f6;
+                border: 1px solid #d1d5db;
+                border-radius: 10px;
+                padding: 8px 10px;
+            }
             QFrame#Sidebar { background: #f9f9f9; border-right: 1px solid #cccccc; }
             QGraphicsView#ImageFrame { background: #000000; border: 1px solid #222222; border-radius: 16px; }
             QLabel#ImageFrame { background: #ffffff; border: 1px solid #cccccc; border-radius: 16px; }
             QLabel#EchoFrame { background: #000000; border: 1px solid #222222; border-radius: 16px; }
-            QFrame#EchoOverlayPanel { background: rgba(0, 0, 0, 170); border: 1px solid #111111; border-radius: 10px; }
-            QLabel#EchoOverlayLabel { color: #ffffff; font-weight: 600; }
+            QFrame#EchoOverlayPanel {
+                background: rgba(0, 0, 0, 185);
+                border: 1px solid rgba(255, 255, 255, 35);
+                border-radius: 14px;
+            }
+            QLabel#EchoOverlayLabel {
+                color: #ffffff;
+                font-weight: 600;
+                font-size: 14px;
+                padding: 2px 0;
+            }
             QLabel { color: #000000; }
             """
         )
@@ -128,17 +146,18 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        header = QtWidgets.QHBoxLayout()
-        header.setSpacing(8)
-
         self.patient_title = QtWidgets.QLabel("Patient")
         self.patient_title.setObjectName("HeroTitle")
+        self.patient_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.patient_title.setVisible(False)
+
+        header_controls = QtWidgets.QHBoxLayout()
+        header_controls.setSpacing(8)
 
         self.back_button = QtWidgets.QPushButton("Home")
         self.back_button.setObjectName("BackButton")
         self.back_button.clicked.connect(self.show_patients)
-        header.addWidget(self.back_button)
+        header_controls.addWidget(self.back_button)
 
         self.modality_buttons = []
         for i, format_data in enumerate(self.formats):
@@ -146,10 +165,14 @@ class MainWindow(QtWidgets.QMainWindow):
             button.setObjectName("ModalityButton")
             button.setCheckable(True)
             button.clicked.connect(lambda checked, idx=i: self.set_modality(idx))
-            header.addWidget(button)
+            header_controls.addWidget(button)
             self.modality_buttons.append(button)
-        header.addStretch(1)
+        header_controls.addStretch(1)
+
+        header = QtWidgets.QVBoxLayout()
+        header.setSpacing(8)
         header.addWidget(self.patient_title)
+        header.addLayout(header_controls)
 
         viewer = QtWidgets.QVBoxLayout()
         viewer.setSpacing(8)
@@ -269,8 +292,8 @@ class MainWindow(QtWidgets.QMainWindow):
             for i, button in enumerate(self.modality_buttons):
                 button.setChecked(i == row)
 
-        if modality_id == "ecg":
-            self._display_ecg(self.current_patient)
+        if modality_id in {"ecg", "ecg_image"}:
+            self._display_ecg_image(self.current_patient)
         elif modality_id == "angio":
             self._display_angio(self.current_patient)
         elif modality_id == "echo":
@@ -278,32 +301,23 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self._display_generic_modality(self.current_patient, modality_id, modality_label)
 
-    def _display_ecg(self, patient_id: str):
-        ecg_data = self.data_loader.load_ecg(patient_id)
+    def _display_ecg_image(self, patient_id: str):
+        ecg_data = self.data_loader.load_ecg_image(patient_id)
         if ecg_data is None:
-            self.angio_viewer.show_placeholder("ECG data not found")
+            self.angio_viewer.show_placeholder("ECG image not found")
             self.content_stack.setCurrentWidget(self.angio_viewer)
             return
 
         data, metadata = ecg_data
         try:
-            # If ECG is a 12-lead signal, use interactive viewer
-            if isinstance(data, np.ndarray) and data.ndim == 2 and data.shape[0] == 12:
-                self.ecg_viewer.set_signal(data, max_time=2000)
-                self.content_stack.setCurrentWidget(self.ecg_viewer)
-                size = metadata.get("shape", data.shape)
-                self.format_detail.setText(f"12-lead ECG - {size[0]}×{size[1]} samples")
-                return
-
-            # Otherwise display as image
             temp_file = self.visualizer.frame_to_temp_file(data)
             self.angio_viewer.set_image_file(temp_file)
             self.content_stack.setCurrentWidget(self.angio_viewer)
 
             size = metadata.get("size", metadata.get("shape", (0, 0)))
-            self.format_detail.setText(f"12-lead ECG - {size[0]}×{size[1]} pixels")
+            self.format_detail.setText(f"ECG - {size[0]}×{size[1]} pixels")
         except Exception as e:
-            self.angio_viewer.show_placeholder(f"Error displaying ECG: {str(e)}")
+            self.angio_viewer.show_placeholder(f"Error displaying ECG image: {str(e)}")
             self.content_stack.setCurrentWidget(self.angio_viewer)
 
     def _display_angio(self, patient_id: str):
@@ -353,8 +367,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     detail_text += f"\nVolume tracings: {len(tracings)} frames marked"
 
                 self.format_detail.setText(detail_text)
-                self.echo_viewer.set_echo_data(frames, metadata)
                 self.content_stack.setCurrentWidget(self.echo_viewer)
+                self.echo_viewer.set_echo_data(frames, metadata)
             else:
                 self.echo_viewer.show_placeholder("Echocardiography video empty")
                 self.content_stack.setCurrentWidget(self.echo_viewer)
@@ -380,8 +394,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
 
             if isinstance(data, list) and data and isinstance(data[0], np.ndarray):
-                self.echo_viewer.set_echo_data(data, metadata)
                 self.content_stack.setCurrentWidget(self.echo_viewer)
+                self.echo_viewer.set_echo_data(data, metadata)
                 fps = metadata.get("fps", 30) or 30
                 self.format_detail.setText(f"{modality_label} - {len(data)} frames @ {fps:.1f} fps")
                 return
@@ -400,13 +414,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.echo_viewer.reset()
         self.patient_title.setVisible(False)
 
+    def get_current_display_metrics(self) -> dict | None:
+        if self.current_modality_id in {"ecg", "ecg_image", "angio"}:
+            return self.angio_viewer.get_display_metrics()
+        if self.current_modality_id == "echo":
+            return self.echo_viewer.get_display_metrics()
+        return None
+
     def save_all_ecg_as_images(self, output_format: str = "png") -> dict:
         results = {}
         for patient_id in self.data_loader.list_patients():
             try:
-                ecg_data = self.data_loader.load_ecg(patient_id)
+                ecg_data = self.data_loader.load_ecg_raw(patient_id)
                 if ecg_data is None:
-                    print(f"⚠ ECG data not found for {patient_id}")
+                    print(f"⚠ ECG raw data not found for {patient_id}")
                     results[patient_id] = None
                     continue
 
